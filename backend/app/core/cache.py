@@ -29,6 +29,7 @@ async def close_redis() -> None:
         await _redis_client.aclose()
         _redis_client = None
 
+
 def lock_key(query_normalized: str) -> str:
     return f"research:lock:{query_normalized}"
 
@@ -37,6 +38,10 @@ def status_key(job_id: str) -> str:
 
 def result_key(query_normalized: str) -> str:
     return f"research:result:{query_normalized}"
+
+def idempotency_key(key: str) -> str:
+    return f"research:idempotency:{key}"
+
 
 async def cache_get(key: str) -> Optional[Any]:
     try:
@@ -68,6 +73,7 @@ async def cache_delete(key: str) -> bool:
     except Exception as e:
         logger.warning(f"Cache DELETE failed for key={key}: {e}")
         return False
+
 
 async def acquire_lock(query_normalized: str, job_id: str) -> bool:
     try:
@@ -115,6 +121,7 @@ async def get_job_status(job_id: str) -> Optional[str]:
         logger.warning(f"Status get failed for job={job_id}: {e}")
         return None
 
+
 async def cache_result(query_normalized: str, result: dict, category: str) -> None:
     ttl = settings.get_cache_ttl(category)
     await cache_set(result_key(query_normalized), result, ttl)
@@ -122,3 +129,16 @@ async def cache_result(query_normalized: str, result: dict, category: str) -> No
 
 async def get_cached_result(query_normalized: str) -> Optional[dict]:
     return await cache_get(result_key(query_normalized))
+
+
+# ---------------------------------------------------------------------------
+# Idempotency helpers — catches retries/double-clicks before credits are ever
+# reserved. Kept in Redis; unrelated to the credit ledger itself.
+# ---------------------------------------------------------------------------
+
+async def check_idempotency(key: str) -> Optional[dict]:
+    return await cache_get(idempotency_key(key))
+
+
+async def set_idempotency(key: str, response_data: dict) -> None:
+    await cache_set(idempotency_key(key), response_data, settings.idempotency_key_ttl_seconds)

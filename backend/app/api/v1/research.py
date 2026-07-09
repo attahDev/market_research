@@ -4,32 +4,37 @@ import uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request
-from sqlalchemy import update
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, Response
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.cache import (
-    acquire_lock, cache_result, get_cached_result,
-    get_inflight_job_id, release_lock,
+    acquire_lock, cache_result, check_idempotency, get_cached_result,
+    get_inflight_job_id, release_lock, set_idempotency,
 )
 from app.core.config import settings
 from app.core.database import AsyncSessionLocal, get_db
-from app.models.research import ResearchJob, ResearchResult
+from app.models.research import ResearchJob, ResearchJobParticipant, ResearchResult
 from app.schemas.research import (
     AnalystRatingsData, ChartData, ClassificationResult,
-    EnrichmentPanel, ErrorDetail, FinalRecommendation,
+    CreditsBlock, EnrichmentPanel, ErrorDetail, FinalRecommendation,
     FundamentalsData, MetricCards, NewsSentimentData,
     OnChainData, ResearchRequest, ResultData,
 )
+from app.services import credits_service
 from app.services.aggregator import aggregate
 from app.services.classifier import classify_query, normalize_query
 from app.services.job_utils import increment_retry_count, update_job_status
+from app.services.rate_limiter import check_rate_limit
 from app.services.summarizer import summarize
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/v1", tags=["research"])
 
 
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def _request_id(request: Request) -> str:
     return getattr(request.state, "request_id", str(uuid.uuid4()))
@@ -48,6 +53,7 @@ def _error(code: str, message: str, request: Request, detail=None, status_code: 
             "request_id": _request_id(request),
         },
     )
+
 
 def _shape_response(raw_data: Optional[dict], category: str):
     if not raw_data:
@@ -109,6 +115,65 @@ def _shape_response(raw_data: Optional[dict], category: str):
         metrics = None
 
     return metrics, charts, enrichments
+
+
+def _credits_block(reservation_status: Optional[dict], cost: int) -> Optional[dict]:
+    if reservation_status is None:
+        return None
+    return CreditsBlock(
+        used_this_call=cost,
+        monthly_remaining=reservation_status["balance"],
+        bonus_remaining=0,  # main-platform schema doesn't split monthly/bonus yet
+        total_remaining=reservation_status["balance"],
+    ).model_dump()
+
+
+async def _add_participant(
+    db: AsyncSession, job_id: uuid.UUID, user_id: str, reference_id: str, cost: int, role: str
+) -> None:
+    db.add(ResearchJobParticipant(
+        job_id=job_id,
+        user_id=uuid.UUID(user_id),
+        reference_id=reference_id,
+        cost=cost,
+        role=role,
+    ))
+
+
+# ---------------------------------------------------------------------------
+# Background pipeline
+# Settles EVERY participant attached to the job — original requester and any
+# users who joined an in-flight job for the same query — not just one
+# reference_id. Each participant is only settled once (settled flag guards
+# against the finally-block running twice on retry).
+# ---------------------------------------------------------------------------
+
+async def _settle_participants(job_id: str, outcome: str) -> None:
+    """outcome is 'commit' or 'refund'."""
+    async with AsyncSessionLocal() as db:
+        result = await db.execute(
+            select(ResearchJobParticipant).where(
+                ResearchJobParticipant.job_id == uuid.UUID(job_id),
+                ResearchJobParticipant.settled == False,  # noqa: E712
+            )
+        )
+        participants = result.scalars().all()
+
+        for p in participants:
+            try:
+                if outcome == "commit":
+                    await credits_service.commit(str(p.user_id), p.cost, p.reference_id)
+                else:
+                    await credits_service.refund(str(p.user_id), p.cost, p.reference_id)
+                p.settled = True
+            except Exception as e:
+                logger.error(
+                    f"Failed to settle participant user={p.user_id} "
+                    f"job={job_id} outcome={outcome}: {e}"
+                )
+
+        await db.commit()
+
 
 async def run_research_pipeline(job_id: str, query: str, query_normalized: str) -> None:
     start_time = time.monotonic()
@@ -172,32 +237,104 @@ async def run_research_pipeline(job_id: str, query: str, query_normalized: str) 
             classification.category,
         )
 
+        if not settings.bypass_rate_limits:
+            await _settle_participants(job_id, outcome="commit")
+
         logger.info(f"Pipeline complete: job={job_id} ms={processing_ms}")
 
     except Exception as e:
         logger.exception(f"Pipeline failed: job={job_id}")
         await update_job_status(job_id, "failed", error=str(e))
+
+        if not settings.bypass_rate_limits:
+            await _settle_participants(job_id, outcome="refund")
+
     finally:
         await release_lock(query_normalized)
+
+
+# ---------------------------------------------------------------------------
+# POST /api/v1/research
+# ---------------------------------------------------------------------------
 
 @router.post("/research", status_code=202)
 async def create_research_job(
     body: ResearchRequest,
     request: Request,
+    response: Response,
     background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
 ):
     query            = body.query.strip()
     query_normalized = normalize_query(query)
+    user_id          = getattr(request.state, "user_id", None)
+    plan_tier        = getattr(request.state, "plan_tier", "free")
+    bypass           = settings.bypass_rate_limits
 
-    # 1. Cache hit → write a cache-sourced job row and return immediately
+    idem_key = request.headers.get("X-Idempotency-Key")
+    if idem_key:
+        cached_idem = await check_idempotency(idem_key)
+        if cached_idem:
+            logger.debug(f"Idempotency hit: key={idem_key}")
+            return _success(cached_idem, request)
+
+    if not bypass:
+        if not credits_service.is_entitled(plan_tier):
+            _error(
+                "PLAN_ACCESS_DENIED",
+                f"Your current plan ({plan_tier}) does not include Research AI. "
+                "Upgrade to Founder Workspace or above.",
+                request,
+                status_code=403,
+            )
+
+        is_limited, retry_after = await check_rate_limit(user_id)
+        if is_limited:
+            response.headers["Retry-After"] = str(retry_after)
+            _error(
+                "RATE_LIMITED",
+                f"Too many requests. Try again in {retry_after}s.",
+                request,
+                status_code=429,
+            )
+
     cached = await get_cached_result(query_normalized)
+    source = "cache" if cached else "fresh"
+    cost = credits_service.cost_for(source)
+
+    reservation_status = None
+    reference_id = str(uuid.uuid4())
+    if not bypass:
+        reservation_status = await credits_service.reserve(user_id, cost, reference_id)
+
+        if reservation_status["status"] == "insufficient":
+            _error(
+                "INSUFFICIENT_CREDITS",
+                f"You need {cost} credits for this request. Purchase a top-up "
+                "or wait for your monthly reset.",
+                request,
+                status_code=402,
+            )
+        if reservation_status["status"] == "error":
+            _error(
+                "CREDITS_SERVICE_UNAVAILABLE",
+                "We couldn't verify your credit balance right now. No credits were charged. "
+                "Please try again shortly.",
+                request,
+                status_code=503,
+            )
+
+    credits_block = _credits_block(reservation_status, cost)
+
+    # ── Cache hit → settle immediately, return result ───────────────────────
     if cached:
         job = ResearchJob(
             query=query,
             query_normalized=query_normalized,
             status="complete",
             source="cache",
+            user_id=uuid.UUID(user_id) if user_id else None,
+            plan_tier=plan_tier,
             completed_at=datetime.now(timezone.utc),
         )
         db.add(job)
@@ -217,24 +354,68 @@ async def create_research_job(
             fetched_at=cached.get("fetched_at"),
             raw_data=cached.get("raw_data"),
         ))
-        await db.commit()
-        return _success({"job_id": str(job.id)}, request)
 
+        if not bypass and reservation_status and reservation_status["status"] == "ok":
+            await _add_participant(db, job.id, user_id, reference_id, cost, role="original")
+
+        await db.commit()
+
+        if not bypass and reservation_status and reservation_status["status"] == "ok":
+            await credits_service.commit(user_id, cost, reference_id)
+
+        response_data = {"job_id": str(job.id), "credits": credits_block}
+        if idem_key:
+            await set_idempotency(idem_key, response_data)
+        return _success(response_data, request)
+
+    # ── In-flight dedup — now properly tracked as a participant ─────────────
     existing_job_id = await get_inflight_job_id(query_normalized)
     if existing_job_id:
-        return _success({"job_id": existing_job_id}, request)
+        if not bypass and reservation_status and reservation_status["status"] == "ok":
+            await _add_participant(
+                db, uuid.UUID(existing_job_id), user_id, reference_id, cost, role="joined"
+            )
+            await db.commit()
+            # NOT committed/refunded here — settled later when the shared
+            # job's pipeline actually finishes, alongside every other participant.
 
-    job = ResearchJob(query=query, query_normalized=query_normalized, status="pending", source="fresh")
+        response_data = {"job_id": existing_job_id, "credits": credits_block}
+        if idem_key:
+            await set_idempotency(idem_key, response_data)
+        return _success(response_data, request)
+
+    # ── Fresh job ─────────────────────────────────────────────────────────
+    job = ResearchJob(
+        query=query,
+        query_normalized=query_normalized,
+        status="pending",
+        source="fresh",
+        user_id=uuid.UUID(user_id) if user_id else None,
+        plan_tier=plan_tier,
+    )
     db.add(job)
     await db.flush()
+
+    if not bypass and reservation_status and reservation_status["status"] == "ok":
+        await _add_participant(db, job.id, user_id, reference_id, cost, role="original")
+
     await db.commit()
 
     job_id = str(job.id)
     await acquire_lock(query_normalized, job_id)
+
     background_tasks.add_task(run_research_pipeline, job_id, query, query_normalized)
 
-    return _success({"job_id": job_id}, request)
+    response_data = {"job_id": job_id, "credits": credits_block}
+    if idem_key:
+        await set_idempotency(idem_key, response_data)
 
+    return _success(response_data, request)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/research/{job_id}  (unchanged)
+# ---------------------------------------------------------------------------
 
 @router.get("/research/{job_id}")
 async def get_research_job(

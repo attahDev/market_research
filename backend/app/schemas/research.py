@@ -12,11 +12,18 @@ PeriodType = Literal["1d", "7d", "30d", "1y", "5y"]
 SentimentLabel = Literal["positive", "negative", "neutral"]
 
 
+class CreditsBlock(BaseModel):
+    """Returned on every job-creation response so the frontend can update the credit counter."""
+    reserved_this_call: int
+    remaining_balance: Optional[int] = None
+    source: str   # 'cache' or 'fresh' — determines which cost was applied
+
+
 class FinalRecommendation(BaseModel):
-    action: str       # BUY / SELL / HOLD / WATCH
-    rationale: str    # why — 1-2 sentences
-    timeframe: str    # e.g. "Short-term (1-4 weeks)"
-    risk_level: str   # Low / Medium / High
+    action: str       
+    rationale: str    
+    timeframe: str    
+    risk_level: str   
 
 
 class LLMSummary(BaseModel):
@@ -176,7 +183,7 @@ class MarketData(BaseModel):
     data_source: str
     fetched_at: str
     partial: bool = False
-    data_confidence: float = 0.5  # 0.0–1.0, computed by aggregator
+    data_confidence: float = 0.5  
 
 
 class ResearchRequest(BaseModel):

@@ -29,7 +29,7 @@ NEGATIVE_WORDS = {
 
 NEWSAPI_BASE = "https://newsapi.org/v2/everything"
 FMP_NEWS_URL = "https://financialmodelingprep.com/api/v3/stock_news"
-MAX_ARTICLES  = 8
+MAX_ARTICLES  = 3
 LOOKBACK_DAYS = 7
 
 
@@ -100,7 +100,7 @@ async def _fetch_from_fmp_news(
             return None
         data = resp.json()
         if isinstance(data, list) and data:
-            # Normalise to NewsAPI-like shape
+            
             normalised = []
             for item in data:
                 normalised.append({

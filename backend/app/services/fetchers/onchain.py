@@ -111,7 +111,6 @@ async def fetch_onchain_data(coin_id: str) -> OnChainData:
     chain, protocol   = _resolve(coin_id)
     glassnode_asset   = GLASSNODE_ASSET_MAP.get(coin_id.lower())
 
-    # Import here to avoid circular import; config not needed at module level
     from app.core.config import settings
     glassnode_key = getattr(settings, "glassnode_api_key", None)
 

@@ -37,6 +37,21 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     allowed_origins: list[str] = []
 
+    # --- Rate limiting ---
+    idempotency_key_ttl_seconds: int = 120
+    rate_limit_per_minute: int = 10
+    rate_limit_per_hour: int = 100
+    # Set True in development to skip entitlement, rate-limit, and credit checks
+    bypass_rate_limits: bool = True
+
+    # --- Credits: main GMBTE Postgres DB (separate from this service's own DB) ---
+    # SCHEMA CAVEAT: assumed shape, not yet confirmed against the real main-platform
+    # schema — user_credits(user_id, credits_balance, credits_reset_at) +
+    # credit_transactions(id, user_id, service, amount, status, reference_id, created_at).
+    # Isolated to app/core/credits_db.py + app/services/credits_service.py so this is
+    # a small change once the real schema is confirmed, not a rewrite.
+    credits_database_url: str = ""
+
     def get_cache_ttl(self, category: str) -> int:
         return {
             "crypto":    self.cache_ttl_crypto,
@@ -53,3 +68,29 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+
+
+# ---------------------------------------------------------------------------
+# Business logic constants for market_research specifically.
+# Mirrors proposal-builder's ENTITLED_PLANS pattern: Research AI is a
+# Founder Workspace+ feature per the pricing doc — Student does NOT include it.
+# (Student includes Career AI/CV Builder/Interview AI — not Research AI.)
+# ---------------------------------------------------------------------------
+
+SERVICE_NAME = "market_research"
+
+ENTITLED_PLANS: set[str] = {"founder_workspace", "founder_pro", "team"}
+
+# Cache hits cost less — no Tiingo/Tavily/Groq spend incurred.
+CREDIT_COST_FRESH: int = 8
+CREDIT_COST_CACHE: int = 1
+
+# Per-plan burst limits (requests per minute) — infrastructure protection,
+# independent of credit balance.
+PLAN_BURST_LIMITS_PER_MINUTE: dict[str, int] = {
+    "explorer":          5,
+    "student":           5,
+    "founder_workspace": 10,
+    "founder_pro":       20,
+    "team":              30,
+}

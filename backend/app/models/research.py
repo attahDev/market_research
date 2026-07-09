@@ -54,6 +54,9 @@ class ResearchJob(Base):
     result: Mapped[Optional["ResearchResult"]] = relationship(
         "ResearchResult", back_populates="job", uselist=False, lazy="selectin"
     )
+    participants: Mapped[list["ResearchJobParticipant"]] = relationship(
+        "ResearchJobParticipant", back_populates="job", lazy="selectin"
+    )
 
 
 class ResearchResult(Base):
@@ -92,3 +95,47 @@ class ResearchResult(Base):
     )
 
     job: Mapped["ResearchJob"] = relationship("ResearchJob", back_populates="result")
+
+
+class ResearchJobParticipant(Base):
+    """
+    Every user attached to a job — the original requester AND anyone who joined
+    an in-flight job for the same query_normalized.
+
+    This exists because a job has exactly one outcome (success/failure), but
+    potentially many users waiting on it, each with their own credit
+    reservation against the main GMBTE DB. When the pipeline finishes, it
+    loops over every row here and commits/refunds each participant's own
+    reference_id based on the job's real outcome — instead of only being able
+    to settle the original requester's reservation.
+    """
+    __tablename__ = "research_job_participants"
+    __table_args__ = (
+        Index("ix_research_job_participants_job_id", "job_id"),
+        Index("ix_research_job_participants_settled", "settled"),
+        UniqueConstraint("job_id", "reference_id", name="uq_job_participant_reference"),
+        {"schema": SCHEMA},
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey(f"{SCHEMA}.research_jobs.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    # Ties this row to the specific reservation made against the main GMBTE DB
+    reference_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    cost: Mapped[int] = mapped_column(Integer, nullable=False)
+    # 'original' = created the job, 'joined' = attached to an in-flight job
+    role: Mapped[str] = mapped_column(String(10), nullable=False, default="original")
+    # Whether commit/refund has already been executed for this participant —
+    # prevents double-settling if the pipeline's finally-block runs twice.
+    settled: Mapped[bool] = mapped_column(nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=now_utc
+    )
+
+    job: Mapped["ResearchJob"] = relationship("ResearchJob", back_populates="participants")
