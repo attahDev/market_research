@@ -235,7 +235,7 @@ function FinalRecommendationsPanel({ recommendations }) {
 
       <div style={{
         display: 'grid',
-        gridTemplateColumns: `repeat(${Math.min(recommendations.length, 2)}, 1fr)`,
+        gridTemplateColumns: `repeat(auto-fit, minmax(240px, 1fr))`,
         gap: 14,
       }}>
         {recommendations.map((rec, i) => {
@@ -414,7 +414,7 @@ export default function ResultsPanel({ jobData, query }) {
       {/* ── Metric cards ── */}
       {metCards.length > 0 && (
         <div className="fade-up" style={{
-          display: 'grid', gridTemplateColumns: `repeat(${metCards.length}, 1fr)`,
+          display: 'grid', gridTemplateColumns: `repeat(${Math.min(metCards.length, 2)}, 1fr)`,
           gap: 14, animationDelay: '0.08s',
         }}>
           {metCards.map((c, i) => <MetricCard key={i} {...c} />)}
@@ -424,7 +424,7 @@ export default function ResultsPanel({ jobData, query }) {
       {/* ── News  +  Chart / Insights ── */}
       <div className="fade-up" style={{
         display: 'grid',
-        gridTemplateColumns: news && hasChart ? '1fr 380px' : '1fr',
+        gridTemplateColumns: '1fr',
         gap: 16, alignItems: 'start',
         animationDelay: '0.12s',
       }}>
@@ -445,7 +445,7 @@ export default function ResultsPanel({ jobData, query }) {
 
       {/* ── Opportunities + Risks ── */}
       <div className="fade-up" style={{
-        display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16,
+        display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16,
         animationDelay: '0.16s',
       }}>
         {/* Opportunities */}
@@ -503,7 +503,7 @@ export default function ResultsPanel({ jobData, query }) {
             <span style={{ fontSize: 15, fontWeight: 700, color: '#0d1b2e' }}>Actionable Advice</span>
           </div>
           <p style={{ fontSize: 12, color: '#8896a7', marginBottom: 22 }}>Based on current market data and AI analysis</p>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 14 }}>
             {insights.slice(0, 3).map((ins, i) => {
               const sep   = ins.match(/[—–:]/)?.[0]
               const parts = sep ? ins.split(sep) : [null, ins]
@@ -528,7 +528,7 @@ export default function ResultsPanel({ jobData, query }) {
 
       {/* ── Supplemental: on-chain / fundamentals / analyst ── */}
       {(onchain || funds || analyst) && (
-        <div style={{ display: 'grid', gridTemplateColumns: analyst ? '1fr 1fr' : '1fr', gap: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 }}>
           {analyst && <AnalystPanel analyst={analyst} />}
           {(onchain || funds) && <SupplementalPanel onchain={onchain} funds={funds} analyst={null} />}
         </div>

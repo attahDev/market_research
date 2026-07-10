@@ -173,4 +173,56 @@
   .hero-pattern {
     background-image: url("data:image/svg+xml,%3Csvg width='60' height='60' viewBox='0 0 60 60' xmlns='http://www.w3.org/2000/svg'%3E%3Cg fill='none' fill-rule='evenodd'%3E%3Cg fill='%23ffffff' fill-opacity='0.03'%3E%3Cpath d='M36 34v-4h-2v4h-4v2h4v4h2v-4h4v-2h-4zm0-30V0h-2v4h-4v2h4v4h2V6h4V4h-4zM6 34v-4H4v4H0v2h4v4h2v-4h4v-2H6zM6 4V0H4v4H0v2h4v4h2V6h4V4H6z'/%3E%3C/g%3E%3C/g%3E%3C/svg%3E");
   }
+
+  /* ── Responsive grid helpers ── */
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+  .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 16px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+  .grid-news-chart { display: grid; grid-template-columns: 1fr 380px; gap: 16px; align-items: start; }
+
+  @media (max-width: 768px) {
+    .grid-3 { grid-template-columns: 1fr; }
+    .grid-2 { grid-template-columns: 1fr; }
+    .grid-4 { grid-template-columns: repeat(2, 1fr); }
+    .grid-news-chart { grid-template-columns: 1fr; }
+
+    .hero-heading { font-size: 22px !important; }
+    .hero-sub { font-size: 12px !important; }
+    .hero-pad { padding: 22px 20px 20px !important; }
+    .hero-search-bar { padding: 5px 5px 5px 14px !important; }
+    .hero-search-bar input { font-size: 13px !important; }
+    .hero-btn { padding: 9px 16px !important; font-size: 13px !important; }
+    .chips-row { display: none !important; }
+
+    .page-pad { padding: 12px 14px 0 !important; }
+    .body-pad { padding: 16px 14px 48px !important; }
+    .topbar-pad { padding: 12px 14px 0 !important; }
+
+    .status-bar { flex-direction: column !important; align-items: flex-start !important; gap: 8px !important; }
+    .status-bar-badges { flex-wrap: wrap !important; }
+
+    .metric-value { font-size: 18px !important; }
+    .section-title { font-size: 13px !important; }
+
+    .actionable-grid { grid-template-columns: 1fr !important; }
+    .recs-grid { grid-template-columns: 1fr !important; }
+    .example-cards { grid-template-columns: 1fr !important; }
+
+    .analyzing-inner { flex-direction: column !important; gap: 14px !important; }
+    .analyzing-cancel { align-self: flex-end !important; }
+
+    .result-summary-bar { padding: 10px 14px !important; }
+    .ai-summary { padding: 20px 18px !important; }
+    .ai-summary p { font-size: 13px !important; }
+
+    .opp-risk-grid { grid-template-columns: 1fr !important; }
+    .supp-grid { grid-template-columns: 1fr !important; }
+
+    .card { border-radius: 10px !important; }
+  }
+
+  @media (max-width: 480px) {
+    .grid-4 { grid-template-columns: 1fr 1fr; }
+    .hero-heading { font-size: 20px !important; }
+  }
 }
