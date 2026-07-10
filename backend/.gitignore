@@ -10,3 +10,4 @@ venv/
 dist/
 build/
 alembic/versions/*.pyc
+docker-compose.yml
